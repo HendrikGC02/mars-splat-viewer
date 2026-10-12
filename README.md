@@ -6,22 +6,20 @@ PDS imagery. It's served by GitHub Pages and used in a 3D theatre room.
 - **Live:** https://hendrikgc02.github.io/mars-splat-viewer/
 - **Theatre link:** https://hendrikgc02.github.io/mars-splat-viewer/?stereo=tb (top-bottom stereo, left eye on top)
 
-## This repo is a build output. Don't edit it here.
+## This repo is the source of truth
 
-The source of truth is the viewer folder in the author's working tree (`C:\GaussianSplattingMars\Desktop\viewer`).
-That folder holds the full scene set and the tests, and `build_site.py` there produces the contents of
-this repo. If you edit `index.html` or `stereo.js` here directly, the next rebuild will overwrite your change.
-Make the change in the source folder, then rebuild. `README.md` is the only file that exists only here.
-
-Note: the source folder is **not** tracked by git (it sits untracked inside the `marsplat` repo). Don't
-assume `git log` there will tell you its history.
+Edit everything here and push. What's on `main` is what's live: Pages serves `main` from the repo root,
+and there's no build step. The scene files themselves are trained and converted elsewhere (see
+"Adding a scene").
 
 | File | What it is |
 |---|---|
 | `index.html` | The whole viewer: UI, controls, render loop, optional "Enhanced detail" post-process |
 | `stereo.js` | `StereoRig`: the off-axis eye cameras used for every stereo mode (see Gotchas) |
 | `scenes.json` | The scene dropdown: `[{ "name": ..., "url": "scenes/<file>" }]`, first entry loads on open |
-| `scenes/*.sog` | Compressed splat scenes (only the colour-calibrated ones are published) |
+| `scenes/*.sog` | Compressed splat scenes. Every file here is public and costs repo size (see below) |
+| `tests/stereo.test.html` | Browser tests for `StereoRig` |
+| `serve.py`, `serve.bat` | Local dev server on http://localhost:8765 (`serve.bat` also opens the browser) |
 | `.nojekyll` | Makes Pages serve files as-is |
 
 ## Stack
@@ -30,8 +28,8 @@ assume `git log` there will tell you its history.
 - three.js `0.180.0` from jsDelivr.
 - [Spark](https://sparkjs.dev) `2.3.1` (`SparkRenderer`, `SplatMesh`, `SparkControls`), loaded from
   `sparkjs.dev`. Spark loads `.sog`, `.spz` and `.ply`.
-- To run it locally, serve the folder over HTTP. ES modules don't load from `file://`. From the source folder use
-  `serve.bat` / `python serve.py` (http://localhost:8765). From here use `python -m http.server`.
+- To run it locally, serve the folder over HTTP with `python serve.py` (any Python 3). ES modules don't
+  load from `file://`.
 
 ## URL parameters
 
@@ -47,10 +45,9 @@ detail, `H` hide panel.
 
 ## Adding a scene
 
-1. **Get a `.sog` file.** The training pipeline (`marsplat`) writes `.ply`. The existing `.sog` files were
-   converted outside that repo, and the exact command wasn't recorded. PlayCanvas's `splat-transform`
-   (`npx @playcanvas/splat-transform in.ply out.sog`) is the usual tool. Check the output by loading it in
-   the local viewer before you publish it.
+1. **Get a `.sog` file.** The training pipeline (`marsplat`) writes `.ply`, and the scenes are converted to
+   compressed `.sog` with separate tooling that lives alongside the training code, not in this repo.
+   `.ply` also loads, but those files run to hundreds of MB, far over the size limit below.
 2. **Coordinates must match the existing scenes.** Scenes are trained Z-up (x forward, y left, z up),
    with the origin at the Mastcam-Z head (about 2 m above ground). The viewer rotates that into three.js Y-up
    and starts the camera 0.3 m below the origin looking along +X. A scene in another frame will load
@@ -58,34 +55,25 @@ detail, `H` hide panel.
 3. **Size limit: under 100 MB per file.** GitHub rejects files over 100 MB, and Pages doesn't serve Git LFS
    objects, so you can't use LFS to get around it. Files over 50 MB push with a warning; that's fine.
    The largest scene today is `site26_v2_cal.sog` at 65 MB.
-4. **In the source folder:** copy the file into `scenes/` and add an entry to `scenes.json`.
-   `build_site.py` publishes only entries whose `url` ends in **`_cal.sog`** (colour-calibrated and
-   compressed). Name the file to match, or change that filter on purpose.
+4. **Add it:** copy the file into `scenes/` and add an entry to `scenes.json`. Order in `scenes.json` is
+   dropdown order, and the first entry loads on open. So far only colour-calibrated scenes have been
+   published, named `*_cal.sog`. That's a convention, not something the code enforces.
 5. **Test locally:** `python serve.py`, open http://localhost:8765/?stereo=tb, and check the new scene
    in mono and in stereo.
-6. **Rebuild and publish** (see below).
+6. **Publish:** commit and push to `main`. The site goes live about a minute later. You can follow the
+   build with `gh api repos/HendrikGC02/mars-splat-viewer/pages/builds/latest --jq .status`.
 
-To remove a scene, delete its `scenes.json` entry in the source folder, rebuild, and `git rm` the file
-here. `build_site.py` copies files in but never deletes them.
+To remove a scene, delete its `scenes.json` entry and `git rm` the file.
 
-## Rebuild and publish
-
-```sh
-git clone https://github.com/HendrikGC02/mars-splat-viewer.git
-python C:/GaussianSplattingMars/Desktop/viewer/build_site.py mars-splat-viewer
-cd mars-splat-viewer
-git add -A && git commit -m "..." && git push
-```
-
-Pages runs from `main` at the root and goes live about a minute after the push. Scene files that haven't
-changed don't add to repo size, because git stores identical files once. Changed or new scenes add their
-full size to history every time, so don't push large scenes over and over for small tweaks.
+**Repo size:** git keeps every version of every scene forever. Deleting or replacing a scene doesn't shrink
+the repo. GitHub recommends keeping repos under about 1 GB, and Pages sites have a 1 GB limit. So test
+scenes locally and commit only the final versions, not every iteration.
 
 ## Tests
 
-`tests/stereo.test.html` in the source folder (not published) checks `StereoRig` in the browser. Serve the
-folder, open `/tests/stereo.test.html`, and every line should say PASS. Results are also exposed as
-`window.__testResults`.
+Serve the folder, open http://localhost:8765/tests/stereo.test.html, and every line should say PASS.
+Results are also exposed as `window.__testResults`. Run the tests after any change to `stereo.js` or to
+how the eye cameras are used.
 
 ## Gotchas
 
@@ -95,7 +83,8 @@ folder, open `/tests/stereo.test.html`, and every line should say PASS. Results 
   real position and quaternion. It also copies near/far/fov from the main camera, because Spark reads them
   for its depth uniforms and sorting.
 - **Top-bottom puts the left eye on top.** WebGL viewports start at the bottom-left, so in `eyeViewports()`
-  the left eye goes at `y = floor(H/2)`.
+  the left eye goes at `y = floor(H/2)`. To check by eye, set eye separation to 50 cm: near objects should
+  sit further right in the top image than in the bottom one.
 - **"Enhanced detail" must not bleed across the seam between the eyes.** The shader's `clampEye()` keeps
   blur and sharpening taps inside each eye's half. The `uLayout` uniform sets the split (0 mono, 1 side-by-side,
   2 top-bottom). If you add a new layout, update `eyeViewports()`, `eyeAspect()`, `LAYOUT` and the shader together.

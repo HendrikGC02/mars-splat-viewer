@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>StereoRig tests</title>
+<style>
+  body { font: 13px/1.5 ui-monospace, monospace; background: #120b08; color: #f4e6d8; padding: 16px; }
+  .pass { color: #7fd17f; } .fail { color: #ff7a6b; font-weight: bold; }
+  h1 { font-size: 15px; }
+</style>
+</head>
+<body>
+<h1>StereoRig tests</h1>
+<div id="out">running…</div>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { StereoRig } from "../stereo.js";
+
+const results = [];
+function check(name, fn) {
+  try { fn(); results.push({ name, ok: true }); }
+  catch (e) { results.push({ name, ok: false, error: String(e.message ?? e) }); }
+}
+function assert(cond, msg) { if (!cond) throw new Error(msg); }
+function assertClose(a, b, msg, eps = 1e-6) {
+  assert(Math.abs(a - b) <= eps, `${msg}: expected ${b}, got ${a}`);
+}
+function assertVecClose(got, want, msg, eps = 1e-6) {
+  assert(got.distanceTo(want) <= eps, `${msg}: expected (${want.toArray()}), got (${got.toArray()})`);
+}
+
+// A camera somewhere other than the origin, pointing somewhere other than -Z, so that an identity
+// matrix is unmistakably wrong.
+function makeCamera() {
+  const camera = new THREE.PerspectiveCamera(70, 1920 / 1080, 0.05, 20000);
+  camera.position.set(3, -0.3, 7);
+  camera.lookAt(new THREE.Vector3(10, 1, -2));
+  camera.updateMatrixWorld();
+  return camera;
+}
+const EYE_SEP = 0.065;
+
+// Characterisation test: documents *why* this module exists. three.js's StereoCamera writes only
+// matrixWorld and leaves matrix at the identity with matrixAutoUpdate off, so any call that
+// recomputes the world matrix — getWorldPosition(), getWorldDirection(), updateWorldMatrix() — throws
+// the pose away. Spark's SparkRenderer calls getWorldPosition() on the render camera every frame.
+check("three.js StereoCamera loses its pose when getWorldPosition() is called", () => {
+  const camera = makeCamera();
+  const stereo = new THREE.StereoCamera();
+  stereo.eyeSep = EYE_SEP; stereo.aspect = 0.5;
+  stereo.update(camera);
+  const posed = new THREE.Vector3().setFromMatrixPosition(stereo.cameraL.matrixWorld);
+  assert(posed.length() > 1, "sanity: eye should start away from the origin");
+  stereo.cameraL.getWorldPosition(new THREE.Vector3());
+  const after = new THREE.Vector3().setFromMatrixPosition(stereo.cameraL.matrixWorld);
+  assertVecClose(after, new THREE.Vector3(0, 0, 0), "upstream behaviour changed — the reset no longer happens");
+});
+
+check("rig places each eye half an eye separation either side of the camera", () => {
+  const camera = makeCamera();
+  const rig = new StereoRig();
+  rig.update(camera, EYE_SEP);
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+  assertVecClose(rig.cameraL.getWorldPosition(new THREE.Vector3()),
+    camera.position.clone().addScaledVector(right, -EYE_SEP / 2), "left eye position");
+  assertVecClose(rig.cameraR.getWorldPosition(new THREE.Vector3()),
+    camera.position.clone().addScaledVector(right, EYE_SEP / 2), "right eye position");
+});
+
+check("rig eyes keep their pose when getWorldPosition()/getWorldDirection() are called", () => {
+  const camera = makeCamera();
+  const rig = new StereoRig();
+  rig.update(camera, EYE_SEP);
+  for (const eye of [rig.cameraL, rig.cameraR]) {
+    const before = eye.matrixWorld.clone();
+    eye.getWorldPosition(new THREE.Vector3());
+    eye.getWorldDirection(new THREE.Vector3());
+    eye.updateMatrixWorld(true);
+    assert(eye.matrixWorld.equals(before), "eye matrixWorld was reset by a world-matrix recompute");
+  }
+});
+
+check("rig eyes look the same way as the camera", () => {
+  const camera = makeCamera();
+  const rig = new StereoRig();
+  rig.update(camera, EYE_SEP);
+  const want = camera.getWorldDirection(new THREE.Vector3());
+  for (const [name, eye] of [["left", rig.cameraL], ["right", rig.cameraR]])
+    assertVecClose(eye.getWorldDirection(new THREE.Vector3()), want, `${name} eye direction`);
+});
+
+check("rig eyes follow the camera when it moves and turns", () => {
+  const camera = makeCamera();
+  const rig = new StereoRig();
+  rig.update(camera, EYE_SEP);
+  const first = rig.cameraL.matrixWorld.clone();
+  camera.position.set(-40, 12, 5);
+  camera.lookAt(new THREE.Vector3(0, 0, 0));
+  camera.updateMatrixWorld();
+  rig.update(camera, EYE_SEP);
+  assert(!rig.cameraL.matrixWorld.equals(first), "left eye did not follow the camera");
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+  assertVecClose(rig.cameraL.getWorldPosition(new THREE.Vector3()),
+    camera.position.clone().addScaledVector(right, -EYE_SEP / 2), "left eye position after move");
+});
+
+// Spark reads camera.near/far straight off the render camera for its depth uniforms, and uses the
+// render camera for splat sorting and LOD, so the eyes must carry the real camera's intrinsics
+// rather than a default PerspectiveCamera's (0.1 / 2000 / 50deg).
+check("rig eyes inherit the camera's intrinsics, with half the horizontal aspect", () => {
+  const camera = makeCamera();
+  const rig = new StereoRig();
+  rig.update(camera, EYE_SEP);
+  for (const [name, eye] of [["left", rig.cameraL], ["right", rig.cameraR]]) {
+    assertClose(eye.near, camera.near, `${name} eye near`);
+    assertClose(eye.far, camera.far, `${name} eye far`);
+    assertClose(eye.fov, camera.fov, `${name} eye fov`);
+    assertClose(eye.aspect, camera.aspect * 0.5, `${name} eye aspect`);
+  }
+});
+
+check("rig eyes use an off-axis frustum, asymmetric in opposite directions", () => {
+  const camera = makeCamera();
+  const rig = new StereoRig();
+  rig.update(camera, EYE_SEP);
+  // element 8 is the horizontal frustum skew: non-zero and mirrored between the two eyes.
+  const skewL = rig.cameraL.projectionMatrix.elements[8], skewR = rig.cameraR.projectionMatrix.elements[8];
+  assert(Math.abs(skewL) > 1e-9, `left eye frustum is not off-axis (skew ${skewL})`);
+  assertClose(skewL, -skewR, "eye frustum skews are not mirrored");
+  for (const [name, eye] of [["left", rig.cameraL], ["right", rig.cameraR]]) {
+    const roundTrip = eye.projectionMatrix.clone().multiply(eye.projectionMatrixInverse).elements;
+    const identity = new THREE.Matrix4().elements;
+    const drift = Math.max(...roundTrip.map((v, i) => Math.abs(v - identity[i])));
+    assert(drift < 1e-5, `${name} eye projectionMatrixInverse is stale (drift ${drift})`);
+  }
+});
+
+// Squeezed (frame-packed) stereo renders each eye with the full-frame aspect; unsqueezed top-bottom
+// gives each eye a half-height viewport, i.e. twice the camera's aspect.
+check("rig honours the per-eye aspect factor for squeezed and top-bottom layouts", () => {
+  const camera = makeCamera();
+  const rig = new StereoRig();
+  for (const factor of [1, 2, 0.5]) {
+    rig.update(camera, EYE_SEP, factor);
+    const want = camera.aspect * factor;
+    for (const [name, eye] of [["left", rig.cameraL], ["right", rig.cameraR]]) {
+      assertClose(eye.aspect, want, `${name} eye aspect at factor ${factor}`);
+      // projection x-scale / y-scale = 1 / aspect for a symmetric frustum; off-axis skew leaves it alone.
+      const e = eye.projectionMatrix.elements;
+      assertClose(e[5] / e[0], want, `${name} eye frustum aspect at factor ${factor}`, 1e-4);
+    }
+  }
+});
+
+check("rig tracks a change in eye separation", () => {
+  const camera = makeCamera();
+  const rig = new StereoRig();
+  rig.update(camera, 0.065);
+  rig.update(camera, 0.4);
+  const gap = rig.cameraL.getWorldPosition(new THREE.Vector3())
+    .distanceTo(rig.cameraR.getWorldPosition(new THREE.Vector3()));
+  assertClose(gap, 0.4, "eye separation", 1e-5);
+});
+
+const failed = results.filter(r => !r.ok);
+document.getElementById("out").innerHTML =
+  results.map(r => r.ok ? `<div class="pass">PASS ${r.name}</div>`
+                        : `<div class="fail">FAIL ${r.name}<br>&nbsp;&nbsp;${r.error}</div>`).join("") +
+  `<p>${results.length - failed.length}/${results.length} passed</p>`;
+window.__testResults = { total: results.length, failed: failed.length, results };
+console.log(`[tests] ${results.length - failed.length}/${results.length} passed`);
+</script>
+</body>
+</html>
