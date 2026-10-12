@@ -1,0 +1,14 @@
+[
+ {
+  "name": "Site 26 multi-station - calibrated colour (PDS radiance fit)",
+  "url": "scenes/site26_v2_cal.sog"
+ },
+ {
+  "name": "Sol 789 v5 - calibrated colour (PDS radiance fit)",
+  "url": "scenes/sol789_v5_cal.sog"
+ },
+ {
+  "name": "Sol 1516 v5 - calibrated colour (PDS radiance fit)",
+  "url": "scenes/sol1516_v5_cal.sog"
+ }
+]
