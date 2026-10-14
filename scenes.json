@@ -1,5 +1,9 @@
 [
  {
+  "name": "Sol 1516 Falbreen, Jezero crater rim - v8 (2026-10-15), calibrated colour (PDS radiance fit)",
+  "url": "scenes/sol1516_v8_cal.sog"
+ },
+ {
   "name": "Site 26 multi-station - calibrated colour (PDS radiance fit)",
   "url": "scenes/site26_v2_cal.sog"
  },
